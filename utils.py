@@ -29,11 +29,3 @@ def apply_transform(data, transform):
     tmp = np.reshape(tmp, (len(tmp), 1))
     tmp = transform(tmp)
     return np.reshape(tmp, data.shape)
-
-
-# # apply scaler inverse transform with shape pre and postprocessing
-# def inverse_transform(data, scaler):
-#     tmp = data.flatten()
-#     tmp = np.reshape(tmp, (len(tmp), 1))
-#     tmp = scaler.inverse_transform(tmp)
-#     return np.reshape(tmp, data.shape)

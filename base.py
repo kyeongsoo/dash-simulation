@@ -12,88 +12,79 @@
 #           modified by Kyeong Soo (Joseph) Kim for EEE415 Labs.
 
 ### import modules
-import os
 import sys
-sys.path.insert(0, '.') # for modules in the current directory
-import os.path as path
-import glob
+sys.path.insert(0, '.')         # for modules in the current directory
 import matplotlib.pyplot as plt
 import numpy as np
 from itertools import *
 from bw_predictor import bw_predictor  # to be implemented by user
 
 
-def simulate_dash(br, bw, bl, dr, nps, nfs, ws):
+def simulate_dash(br, bw, bl, sd, nps, nfs, ws):
     # set parameters
     nq = br.shape[1]            # number of quality levels
     ns = len(br)                # number of segments
-    nbl = len(bl)               # number of bandwidth levels
     phi = np.array(list(product(range(1,nq+1), repeat=nfs+1)))  # quality patterns over current and future segments
     w1, w2, w3 = ws             # weights of QoE
 
-    # initialize objects and variables
+    # create a bw_predictor object for bandwidth prediction
     bp = bw_predictor(
                  model_fname='lstm_model.h5',
                  scaler_fname='lstm_scaler.joblib',
                  n_past_segments=nps,
-                 n_future_segments=nfs) # creat a bw_predictor object
-    t = np.zeros((ns+1, nfs+1))
-    t[0][nfs] = 5
-    ts = np.zeros((ns, nfs+1))
+                 n_future_segments=nfs)
+
+    t = np.zeros(nfs+2)
+    ts = np.zeros(nfs+1)
     qoe = np.zeros(len(phi))
     Q = np.zeros(ns, dtype=int)  # to be used as index
-    # Q[0] = 1                    # the lowest quality for the 1st segment
     T = np.zeros(ns+1)
-    T[0]=5
     Ts = np.zeros(ns)
+
+    # buffer update during the intial period w/o adaptation
+    Q[:nps] = 1
+    T[0]=5
+    for i in range(nps):
+        T[i+1] = max(T[i]-br[i][Q[i]-1]*sd/bw[i]+sd, 0)
+        Ts[i] = max(br[i][Q[i]-1]*sd/bw[i]-T[i], 0)
     
-    # main simulation loop TBD: handle the initial past segments bw observation
-    # for bandwidth prediction, including the adjustment of the number of
-    # segments (i.e., range(nps, ns-nfs-1))
-    idxs = np.arange(nps, ns-nfs)  # segment indexes for the adaptation period
+    # main simulation loop for adaptation
+    idxs = np.arange(nps, ns-nfs)
     for i in idxs:
         pbws = bp.predict(bw[i-nps:i].reshape((1, nps)))  # prediced bandwdiths
         for j in range(len(phi)): # optimization over quality patterns
             q = phi[j][:]
             e = np.mean(q)
             v = abs(q[1:]-q[:-1]).mean()
-            t[i+1][0] = max(t[i][nfs]-br[i][q[0]-1]*dr/pbws[0]+dr,0)
-            for x in range(nfs):
-                t[i+1][x+1] = max(t[i+1][x]-br[i+x][q[x]-1]*dr/pbws[x]+dr,0)
-            for y in range(nfs+1):
-                ts[i][y] = max(br[i+y][q[y]-1]*dr/pbws[y]-t[i+1][y],0)
-            tst = np.sum(ts[i])
-            ttt = dr*(nfs+1)+tst
+
+            # buffer updating for the currnet and future segments
+            # N.B.: be careful about the indexes.
+            t[0] = T[i]
+            for k in range(nfs+1):
+                t[k+1] = max(t[k]-br[i+k][q[k]-1]*sd/pbws[k]+sd,0)
+                ts[k] = max(br[i+k][q[k]-1]*sd/pbws[k]-t[k], 0)
+
+            tst = np.sum(ts)
+            ttt = sd*(nfs+1)+tst
             ps = tst/ttt
-            delta = (t[i+1][nfs]-t[i+1][0])/(nfs+1)
+            delta = (t[nfs+1]-t[0])/(nfs+1)
             qoe[j] = e-w1*v-w2*ps+w3*delta
         qindex = np.argmax(qoe, axis=0)
         Q[i] = phi[qindex][0]
 
         # update buffer level for the current segment
-        T[i+1] = max(T[i]-br[i][Q[i]-1]*dr/bw[i]+dr, 0)
-        Ts[i] = max(br[i][Q[i]-1]*dr/bw[i]-T[i], 0)
-        # t[i+1][0] = max(t[i][l]-br[i][int(Q[i])-1]*dr/pbws[0]+dr,0)
-        # for x in range(nfs):
-        #     t[i+1][x+1] = max(t[i+1][x]-br[i+x][int(Q[i+x])-1]*dr/pbws[x]+dr,0)
-        # for y in range(nfs+1):
-        #     ts[i][y] = max(br[i+y][int(Q[i+y])-1]*dr/pbws[i+y]-t[i+1][y],0)
+        T[i+1] = max(T[i]-br[i][Q[i]-1]*sd/bw[i]+sd, 0)
+        Ts[i] = max(br[i][Q[i]-1]*sd/bw[i]-T[i], 0)
 
-    # calculate and return QoE metric during the adaptation period    
+    # limit performance metrics to the adaptation period    
     Q = Q[idxs]
     Ts = Ts[idxs]
     T = T[idxs+1]
     
     E = Q.mean()                 # average requested media quality
-    V = abs(Q[1:]-Q[:-1]).mean() # quality switching frequency
-    # T = np.zeros((ns+1))
-    # Ts = np.zeros((ns))
-    # T[0]=5
-    # for i in range(ns):
-    #     T[i+1] = max(T[i]-br[i][int(Q[i])-1]*dr/bw[i]+dr, 0)
-    #     Ts[i] = max(br[i][int(Q[i])-1]*dr/bw[i]-T[i], 0)
+    V = abs(Q[1:]-Q[:-1]).mean()  # quality switching frequency
     TSS = Ts.sum()
-    PSS = TSS/(ns*dr + TSS)     # ratio of starvation event in time domain
+    PSS = TSS/(ns*sd + TSS)     # ratio of starvation event in time domain
     QoE = E - w1*V - w2*PSS
     return QoE, Q, T
 
@@ -132,15 +123,15 @@ if __name__ == "__main__":
         "-P",
         "--n_past_segments",
         help=
-        "number of past segments used for bandwidth prediction; default is 1",
-        default=2,
+        "number of past segments used for bandwidth prediction; default is 5",
+        default=5,
         type=int)
     parser.add_argument(
         "-F",
         "--n_future_segments",
         help=
-        "number of future segments to predict bandwidths for; default is 2",
-        default=2,
+        "number of future segments to predict bandwidths for; default is 1",
+        default=1,
         type=int)
     parser.add_argument(
         "-W",
@@ -164,16 +155,18 @@ if __name__ == "__main__":
     # simulate DASH video streaming
     QoE, Q, T = simulate_dash(br, bw, bl, sd, nps, nfs, qw)
 
+    # print QoE
+    print("QoE: {0:.4e}".format(QoE))
+
     # plot the figures
     ns = len(br)                # number of segments
     x = np.arange(ns)
     bit = np.empty(ns)
-    bit[:nps] = np.nan          # ignore for the period of n_past_segments
+    Tplot = np.empty(ns)        # T for plotting
+    bit[:] = np.nan             # ignore values outside the adaptation period
+    Tplot[:] = np.nan           # "
     for i in range(nps, ns-nfs):
         bit[i] = br[i][Q[i-nps]-1]
-    Tplot = np.empty(ns)        # process T for plotting
-    Tplot[:nps] = np.nan        # ignore for the period of n_past_segments
-    for i in range(nps, ns-nfs):
         Tplot[i] = T[i-nps]
 
     plt.close('all')
@@ -181,10 +174,9 @@ if __name__ == "__main__":
 
     # 1st subplot
     axs[0].plot(x, bw, color='blue', label='Bandwidth')
-    axs[0].plot(x, bit, color='red', label='Bitrate')
+    axs[0].plot(x, bit, color='red', label='Video Bitrate')
     axs[0].set_xlabel('Segment Index')
     axs[0].set_ylabel('Bitrate [kbs]')
-    # axs[0].set_title('Requested Bitrate and Bandwidth')
     axs[0].legend()
 
     # 2nd subplot

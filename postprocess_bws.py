@@ -1,3 +1,5 @@
+# This code is based on the sample code from the SciPy Cookbook:
+# https://scipy-cookbook.readthedocs.io/items/SignalSmooth.html
 import matplotlib.pyplot as plt
 import numpy as np
 

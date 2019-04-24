@@ -39,8 +39,6 @@ class bw_predictor(object):
     def predict(self, history):
         # scale input data
         history = apply_transform(history, self.scaler.transform)
-        # # history = history.reshape((self.nps, 1)) # [n_samples, n_features] for scaler
-        # history = history.reshape((1, self.nps)) # [n_samples, n_features] for scaler
 
         # predict
         history = np.reshape(history, (history.shape[0], 1, self.nps)) # [samples, time steps, features] for model

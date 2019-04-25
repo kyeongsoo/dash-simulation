@@ -60,15 +60,15 @@ if __name__ == "__main__":
         "-P",
         "--n_past_segments",
         help=
-        "number of past segments used for bandwidth prediction; default is 1",
-        default=2,
+        "number of past segments used for bandwidth prediction; default is 5",
+        default=5,
         type=int)
     parser.add_argument(
         "-F",
         "--n_future_segments",
         help=
-        "number of future segments to predict bandwidths for; default is 2",
-        default=2,
+        "number of future segments to predict bandwidths for; default is 1",
+        default=1,
         type=int)
     args = parser.parse_args()
     n_past_segments = args.n_past_segments

@@ -24,7 +24,7 @@ def simulate_dash(br, bw, bl, sd, nps, nfs, ws):
     # set parameters
     nq = br.shape[1]            # number of quality levels
     ns = len(br)                # number of segments
-    phi = np.array(list(product(range(1,nq+1), repeat=nfs+1)))  # quality patterns over current and future segments
+    phi = np.array(list(product(range(1, nq+1), repeat=nfs+1)))  # quality patterns over current and future segments
     w1, w2, w3 = ws             # weights of QoE
 
     # create a bw_predictor object for bandwidth prediction
@@ -43,25 +43,25 @@ def simulate_dash(br, bw, bl, sd, nps, nfs, ws):
 
     # buffer update during the intial period w/o adaptation
     Q[:nps] = 1
-    T[0]=5
+    T[0] = 5
     for i in range(nps):
         T[i+1] = max(T[i]-br[i][Q[i]-1]*sd/bw[i]+sd, 0)
         Ts[i] = max(br[i][Q[i]-1]*sd/bw[i]-T[i], 0)
-    
+
     # main simulation loop for adaptation
     idxs = np.arange(nps, ns-nfs)
     for i in idxs:
         pbws = bp.predict(bw[i-nps:i].reshape((1, nps)))  # prediced bandwdiths
-        for j in range(len(phi)): # optimization over quality patterns
+        for j in range(len(phi)):  # optimization over quality patterns
             q = phi[j][:]
             e = np.mean(q)
             v = abs(q[1:]-q[:-1]).mean()
 
-            # buffer updating for the currnet and future segments
+            # buffer updating for the current and future segments
             # N.B.: be careful about the indexes.
             t[0] = T[i]
             for k in range(nfs+1):
-                t[k+1] = max(t[k]-br[i+k][q[k]-1]*sd/pbws[k]+sd,0)
+                t[k+1] = max(t[k]-br[i+k][q[k]-1]*sd/pbws[k]+sd, 0)
                 ts[k] = max(br[i+k][q[k]-1]*sd/pbws[k]-t[k], 0)
 
             tst = np.sum(ts)
@@ -76,11 +76,11 @@ def simulate_dash(br, bw, bl, sd, nps, nfs, ws):
         T[i+1] = max(T[i]-br[i][Q[i]-1]*sd/bw[i]+sd, 0)
         Ts[i] = max(br[i][Q[i]-1]*sd/bw[i]-T[i], 0)
 
-    # limit performance metrics to the adaptation period    
+    # limit performance metrics to the adaptation period
     Q = Q[idxs]
     Ts = Ts[idxs]
     T = T[idxs+1]
-    
+
     E = Q.mean()                 # average requested media quality
     V = abs(Q[1:]-Q[:-1]).mean()  # quality switching frequency
     TSS = Ts.sum()
@@ -149,8 +149,8 @@ if __name__ == "__main__":
     qw = list(map(float, args.qoe_weights.split(',')))  # w3 -> lambda; labmda is a Python keyword
 
     # read data
-    br = np.load(dash_bitrates)      # dash bitrates
-    bw = np.load(channel_bandwidths) # channel bandwdiths
+    br = np.load(dash_bitrates)         # dash bitrates
+    bw = np.load(channel_bandwidths)    # channel bandwdiths
 
     # simulate DASH video streaming
     QoE, Q, T = simulate_dash(br, bw, bl, sd, nps, nfs, qw)

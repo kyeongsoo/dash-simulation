@@ -30,12 +30,12 @@ import torch
 from dataclasses import dataclass
 
 
-# initialize parameters
+# global variables
 # - DQL
 CH_HISTORY = 2                  # number of channel capacity history samples
-BATCH_SIZE = 10
-EPS_START = 0.9
-EPS_END = 0.05
+BATCH_SIZE = 100
+EPS_START = 0.8
+EPS_END = 0.0
 EPS_DECAY = 200
 LEARNING_RATE = 1e-4
 # - FFN
@@ -46,8 +46,7 @@ N_O = 4
 # - D-DASH
 BETA = 2
 GAMMA = 50
-# DELTA = 0.001
-DELTA = 0.0  # for this work
+DELTA = 0.001
 B_MAX = 20
 B_THR = 10
 T = 2  # segment duration
@@ -69,20 +68,20 @@ class State:
     version of the state defined in [1].
     """
 
-    segment_quality: int
-    segment_size: float
+    sg_quality: int
+    sg_size: float
     buffer: float
-    channel_history: np.ndarray
+    ch_history: np.ndarray
 
     def tensor(self):
         return torch.tensor(
             np.concatenate(
                 (
                     np.array([
-                        self.segment_quality,
-                        self.segment_size,
+                        self.sg_quality,
+                        self.sg_size,
                         self.buffer]),
-                    self.channel_history
+                    self.ch_history
                 ),
                 axis=None
             ),
@@ -134,11 +133,14 @@ class ActionSelector(object):
     def reset(self):
         self.steps_done = 0
 
+    def increse_step_number(self):
+        self.steps_done += 1
+
     def action(self, state):
         sample = random.random()
         eps_threshold = EPS_END + (EPS_START - EPS_END) * \
             math.exp(-1.*self.steps_done/EPS_DECAY)
-        self.steps_done += 1
+        # self.steps_done += 1
         if sample > eps_threshold:
             with torch.no_grad():
                 return int(torch.argmax(policy_net(state.tensor())))
@@ -157,63 +159,11 @@ policy_net = torch.nn.Sequential(
 ).to(device)
 optimizer = torch.optim.Adam(policy_net.parameters(), lr=LEARNING_RATE)
 
+
 # TODO: Implement target network
 # target_net = copy.deepcopy(policy_net)
 # target_net.load_state_dict(policy_net.state_dict())
 # target_net.eval()
-
-
-def obtain_reward(state, next_state, segment_quality):
-    """
-    Return reward based on QoE of video streaming (i.e., (4) in [1]).
-    """
-    downloading_time = next_state.segment_size/next_state.channel_history[-1]
-    rebuffering = max(0, downloading_time-state.buffer)
-    return (
-        next_state.segment_quality
-        - BETA*abs(next_state.segment_quality-state.segment_quality)
-        - GAMMA*rebuffering
-        - DELTA*max(0, B_THR-next_state.buffer)**2
-    )
-
-
-def optimize_model(memory):
-    if len(memory) < BATCH_SIZE:
-        return
-    experiences = memory.sample(BATCH_SIZE)
-
-    state_batch = torch.stack([experiences[i].state.tensor()
-                               for i in range(BATCH_SIZE)])
-    next_state_batch = torch.stack([experiences[i].next_state.tensor()
-                                    for i in range(BATCH_SIZE)])
-    action_batch = torch.tensor([experiences[i].action
-                                 for i in range(BATCH_SIZE)])
-    reward_batch = torch.tensor([experiences[i].reward
-                                 for i in range(BATCH_SIZE)])
-
-    # $Q(s_t, q_t|\bm{w}_t)$ in (13) in [1]
-    # 1. policy_net generates a batch of Q(s_t, q|\bm{w}_t) for all q values.
-    # 2. The columns of actions taken are selected using 'action_batch'.
-    state_action_values = policy_net(state_batch).gather(1, action_batch.view(BATCH_SIZE, -1))
-
-    # $\max_{q}\hat{Q}(s_{t+1},q|\bar{\bm{w}}_t$ in (13) in [1]
-    # TODO: Replace policy_net with target_net.
-    next_state_values = policy_net(next_state_batch).max(1)[0].detach()
-
-    # expected Q values
-    expected_state_action_values = reward_batch + (LAMBDA * next_state_values)
-
-    # MSE
-    mse_loss = torch.nn.MSELoss()
-    loss = mse_loss(state_action_values,
-                    expected_state_action_values.unsqueeze(1))
-
-    # optimize the model
-    optimizer.zero_grad()
-    loss.backward()
-    for param in policy_net.parameters():
-        param.grad.data.clamp_(-1, 1)
-    optimizer.step()
 
 
 def simulate_dash(sss, bws):
@@ -225,40 +175,51 @@ def simulate_dash(sss, bws):
     memory = ReplayMemory(1000)
     selector = ActionSelector(num_qualities)
 
-    # main simulation loop
+    # main training loop
     num_episodes = 50
-    episode_rewards = np.empty(num_episodes)
+    mean_sqs = np.empty(num_episodes)  # mean segment qualities
+    mean_rewards = np.empty(num_episodes)  # mean rewards
     for i_episode in range(num_episodes):
+
+        # TODO: use different video traces per episode
+
+        sqs = np.empty(num_segments-CH_HISTORY)
         rewards = np.empty(num_segments-CH_HISTORY)
 
         # initialize the state
-        segment_quality = random.randrange(num_qualities)  # random action
+        sg_quality = random.randrange(num_qualities)  # random action
         state = State(
-            segment_quality=segment_quality,
-            segment_size=sss[CH_HISTORY-1, segment_quality],
+            sg_quality=sg_quality,
+            sg_size=sss[CH_HISTORY-1, sg_quality],
             buffer=T,
-            channel_history=bws[0:CH_HISTORY]
+            ch_history=bws[0:CH_HISTORY]
         )
 
         for t in range(CH_HISTORY, num_segments):
-            # select and perform an action
-            segment_quality = selector.action(state)
+            sg_quality = selector.action(state)
+            sqs[t-CH_HISTORY] = sg_quality
+
             # update the state
-            tau = sss[t, segment_quality] / bws[t]
+            tau = sss[t, sg_quality] / bws[t]
             buffer_next = T - max(0, state.buffer-tau)
             next_state = State(
-                segment_quality=segment_quality,
-                segment_size=sss[t, segment_quality],
+                sg_quality=sg_quality,
+                sg_size=sss[t, sg_quality],
                 buffer=buffer_next,
-                channel_history=bws[t-CH_HISTORY+1:t+1]
+                ch_history=bws[t-CH_HISTORY+1:t+1]
             )
-            rewards[t-CH_HISTORY] = obtain_reward(state, next_state,
-                                                  segment_quality)
+
+            # calculate reward (i.e., (4) in [1]).
+            downloading_time = next_state.sg_size/next_state.ch_history[-1]
+            rebuffering = max(0, downloading_time-state.buffer)
+            rewards[t-CH_HISTORY] = next_state.sg_quality \
+                - BETA*abs(next_state.sg_quality-state.sg_quality) \
+                - GAMMA*rebuffering - DELTA*max(0, B_THR-next_state.buffer)**2
 
             # store the experience in the replay memory
             experience = Experience(
                 state=state,
-                action=segment_quality,
+                action=sg_quality,
                 reward=rewards[t-CH_HISTORY],
                 next_state=next_state
             )
@@ -267,8 +228,44 @@ def simulate_dash(sss, bws):
             # move to the next state
             state = next_state
 
+            #############################
             # optimize the policy network
-            optimize_model(memory)
+            #############################
+            if len(memory) < BATCH_SIZE:
+                continue
+            experiences = memory.sample(BATCH_SIZE)
+            state_batch = torch.stack([experiences[i].state.tensor()
+                                       for i in range(BATCH_SIZE)])
+            next_state_batch = torch.stack([experiences[i].next_state.tensor()
+                                            for i in range(BATCH_SIZE)])
+            action_batch = torch.tensor([experiences[i].action
+                                         for i in range(BATCH_SIZE)])
+            reward_batch = torch.tensor([experiences[i].reward
+                                         for i in range(BATCH_SIZE)])
+
+            # $Q(s_t, q_t|\bm{w}_t)$ in (13) in [1]
+            # 1. policy_net generates a batch of Q(...) for all q values.
+            # 2. columns of actions taken are selected using 'action_batch'.
+            state_action_values = policy_net(state_batch).gather(1, action_batch.view(BATCH_SIZE, -1))
+
+            # $\max_{q}\hat{Q}(s_{t+1},q|\bar{\bm{w}}_t$ in (13) in [1]
+            # TODO: Replace policy_net with target_net.
+            next_state_values = policy_net(next_state_batch).max(1)[0].detach()
+
+            # expected Q values
+            expected_state_action_values = reward_batch + (LAMBDA * next_state_values)
+
+            # loss fuction, i.e., (14) in [1]
+            mse_loss = torch.nn.MSELoss(reduction='mean')
+            loss = mse_loss(state_action_values,
+                            expected_state_action_values.unsqueeze(1))
+
+            # optimize the model
+            optimizer.zero_grad()
+            loss.backward()
+            for param in policy_net.parameters():
+                param.grad.data.clamp_(-1, 1)
+            optimizer.step()
 
             # TODO: Implement target network
             # # update the target network
@@ -276,13 +273,16 @@ def simulate_dash(sss, bws):
             #     target_net.load_state_dict(policy_net.state_dict())
 
             # # DEBUG
-            # print("Action[{0:3d}]: {1:1d}, Reward[{2:3d}]: {3:E}".format(t, segment_quality, t, rewards[t-CH_HISTORY]))
+            # print("Action[{0:3d}]: {1:1d}, Reward[{2:3d}]: {3:E}".format(t, sg_quality, t, rewards[t-CH_HISTORY]))
 
-        # plt.plot(rewards)
-        episode_rewards[i_episode] = rewards[-1]
-        print("Episode Reward[{0:2d}]: {1:E}".format(i_episode, episode_rewards[i_episode]))
+        # processing after each episode
+        selector.increse_step_number()
+        mean_sqs[i_episode] = sqs.mean()
+        mean_rewards[i_episode] = rewards.mean()
+        print("Mean Segment Quality[{0:2d}]: {1:E}".format(i_episode, mean_sqs[i_episode]))
+        print("Mean Reward[{0:2d}]: {1:E}".format(i_episode, mean_rewards[i_episode]))
 
-    return episode_rewards
+    return (mean_sqs, mean_rewards)
 
 
 if __name__ == "__main__":
@@ -309,6 +309,11 @@ if __name__ == "__main__":
     bws = np.load(channel_bandwidths)  # channel bandwdiths [bit/s]
 
     # simulate D-DASH
-    episode_rewards = simulate_dash(sss, bws)
-    plt.plot(episode_rewards)
+    mean_sqs, mean_rewards = simulate_dash(sss, bws)
+
+    # plot results
+    fig, axs = plt.subplots(2)
+    axs[0].plot(mean_rewards)
+    axs[1].plot(mean_sqs)
     input("Press ENTER to continue...")
+    plt.close('all')

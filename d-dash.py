@@ -33,7 +33,7 @@ from dataclasses import dataclass
 # global variables
 # - DQL
 CH_HISTORY = 2                  # number of channel capacity history samples
-BATCH_SIZE = 100
+BATCH_SIZE = 1000
 EPS_START = 0.8
 EPS_END = 0.0
 EPS_DECAY = 200
@@ -100,25 +100,27 @@ class Experience:
 
 
 class ReplayMemory(object):
-    """Memory for experience reply"""
+    """Replay memory based on a circular buffer (with overlapping)"""
 
     def __init__(self, capacity):
         self.capacity = capacity
-        self.memory = []
+        self.memory = [None] * self.capacity
         self.position = 0
+        self.num_elements = 0
 
     def push(self, experience):
-        """Saves a transition."""
-        if len(self.memory) < self.capacity:
-            self.memory.append(None)
+        # if len(self.memory) < self.capacity:
+        #     self.memory.append(None)
         self.memory[self.position] = experience
         self.position = (self.position + 1) % self.capacity
+        if self.num_elements < self.capacity:
+            self.num_elements += 1
 
     def sample(self, batch_size):
         return random.sample(self.memory, batch_size)
 
-    def __len__(self):
-        return len(self.memory)
+    def get_num_elements(self):
+        return self.num_elements
 
 
 class ActionSelector(object):
@@ -175,7 +177,9 @@ def simulate_dash(sss, bws):
     memory = ReplayMemory(1000)
     selector = ActionSelector(num_qualities)
 
-    # main training loop
+    ##########
+    # training
+    ##########
     num_episodes = 50
     mean_sqs = np.empty(num_episodes)  # mean segment qualities
     mean_rewards = np.empty(num_episodes)  # mean rewards
@@ -231,7 +235,7 @@ def simulate_dash(sss, bws):
             #############################
             # optimize the policy network
             #############################
-            if len(memory) < BATCH_SIZE:
+            if memory.get_num_elements() < BATCH_SIZE:
                 continue
             experiences = memory.sample(BATCH_SIZE)
             state_batch = torch.stack([experiences[i].state.tensor()
@@ -272,9 +276,6 @@ def simulate_dash(sss, bws):
             # if t % TARGET_UPDATE == 0:
             #     target_net.load_state_dict(policy_net.state_dict())
 
-            # # DEBUG
-            # print("Action[{0:3d}]: {1:1d}, Reward[{2:3d}]: {3:E}".format(t, sg_quality, t, rewards[t-CH_HISTORY]))
-
         # processing after each episode
         selector.increse_step_number()
         mean_sqs[i_episode] = sqs.mean()
@@ -312,8 +313,17 @@ if __name__ == "__main__":
     mean_sqs, mean_rewards = simulate_dash(sss, bws)
 
     # plot results
-    fig, axs = plt.subplots(2)
+    fig, axs = plt.subplots(nrows=2, sharex=True)
     axs[0].plot(mean_rewards)
+    axs[0].set_ylabel("Reward")
     axs[1].plot(mean_sqs)
+    axs[1].set_ylabel("Video Quality")
+    axs[1].set_xlabel("Video Episode")
+    plt.show()
     input("Press ENTER to continue...")
     plt.close('all')
+
+
+
+
+

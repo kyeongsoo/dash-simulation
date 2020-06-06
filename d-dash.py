@@ -145,7 +145,7 @@ class ActionSelector(object):
         # self.steps_done += 1
         if sample > eps_threshold:
             with torch.no_grad():
-                return int(torch.argmax(policy_net(state.tensor())))
+                return int(torch.argmax(policy_net(state.tensor().to(device))))
         else:
             return random.randrange(self.num_actions)
 
@@ -238,23 +238,23 @@ def simulate_dash(sss, bws):
             if memory.get_num_elements() < BATCH_SIZE:
                 continue
             experiences = memory.sample(BATCH_SIZE)
-            state_batch = torch.stack([experiences[i].state.tensor()
+            state_batch = torch.stack([experiences[i].state.tensor().to(device)
                                        for i in range(BATCH_SIZE)])
-            next_state_batch = torch.stack([experiences[i].next_state.tensor()
+            next_state_batch = torch.stack([experiences[i].next_state.tensor().to(device)
                                             for i in range(BATCH_SIZE)])
             action_batch = torch.tensor([experiences[i].action
-                                         for i in range(BATCH_SIZE)])
+                                         for i in range(BATCH_SIZE)]).to(device)
             reward_batch = torch.tensor([experiences[i].reward
-                                         for i in range(BATCH_SIZE)])
+                                         for i in range(BATCH_SIZE)]).to(device)
 
             # $Q(s_t, q_t|\bm{w}_t)$ in (13) in [1]
             # 1. policy_net generates a batch of Q(...) for all q values.
             # 2. columns of actions taken are selected using 'action_batch'.
-            state_action_values = policy_net(state_batch).gather(1, action_batch.view(BATCH_SIZE, -1))
+            state_action_values = policy_net(state_batch).gather(1, action_batch.view(BATCH_SIZE, -1)).double()
 
             # $\max_{q}\hat{Q}(s_{t+1},q|\bar{\bm{w}}_t$ in (13) in [1]
             # TODO: Replace policy_net with target_net.
-            next_state_values = policy_net(next_state_batch).max(1)[0].detach()
+            next_state_values = policy_net(next_state_batch).max(1)[0].detach().double()
 
             # expected Q values
             expected_state_action_values = reward_batch + (LAMBDA * next_state_values)

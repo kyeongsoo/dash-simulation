@@ -205,7 +205,7 @@ def simulate_dash(sss, bws):
 
             # update the state
             tau = sss[t, sg_quality] / bws[t]
-            buffer_next = T - max(0, state.buffer-tau)
+            buffer_next = T + max(0, state.buffer-tau)
             next_state = State(
                 sg_quality=sg_quality,
                 sg_size=sss[t, sg_quality],

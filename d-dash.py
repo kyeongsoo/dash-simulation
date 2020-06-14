@@ -20,12 +20,13 @@
 #         https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
 
 
-# import copy                     # for target network
+# import copy                     # TASK2: for target network
 import math
 import random
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+import sys
 import torch
 from dataclasses import dataclass
 
@@ -36,7 +37,6 @@ CH_HISTORY = 2                  # number of channel capacity history samples
 BATCH_SIZE = 1000
 EPS_START = 0.8
 EPS_END = 0.0
-EPS_DECAY = 200
 LEARNING_RATE = 1e-4
 # - FFN
 N_I = 3 + CH_HISTORY            # input dimension (= state dimension)
@@ -128,26 +128,35 @@ class ActionSelector(object):
     Select an action based on the exploration policy.
     """
 
-    def __init__(self, num_actions):
+    def __init__(self, num_actions, num_segments, greedy_policy=False):
         self.steps_done = 0
         self.num_actions = num_actions
+        self.num_segments = num_segments
+        self.greedy_policy = greedy_policy
 
     def reset(self):
         self.steps_done = 0
+
+    # def set_greedy_policy(self):
+    #     self.greedy_policy = True
 
     def increse_step_number(self):
         self.steps_done += 1
 
     def action(self, state):
-        sample = random.random()
-        eps_threshold = EPS_END + (EPS_START - EPS_END) * \
-            math.exp(-1.*self.steps_done/EPS_DECAY)
-        # self.steps_done += 1
-        if sample > eps_threshold:
+        if self.greedy_policy:
             with torch.no_grad():
                 return int(torch.argmax(policy_net(state.tensor())))
         else:
-            return random.randrange(self.num_actions)
+            sample = random.random()
+            x = 20 * (self.steps_done / self.num_segments) - 6.  # scaled s.t. -6 < x < 14
+            eps_threshold = EPS_END + (EPS_START - EPS_END) / (1. + math.exp(x))
+            # self.steps_done += 1
+            if sample > eps_threshold:
+                with torch.no_grad():
+                    return int(torch.argmax(policy_net(state.tensor())))
+            else:
+                return random.randrange(self.num_actions)
 
 
 # policy-network based on FNN with 2 hidden layers
@@ -162,20 +171,24 @@ policy_net = torch.nn.Sequential(
 optimizer = torch.optim.Adam(policy_net.parameters(), lr=LEARNING_RATE)
 
 
-# TODO: Implement target network
+# TASK2: Implement target network
 # target_net = copy.deepcopy(policy_net)
 # target_net.load_state_dict(policy_net.state_dict())
 # target_net.eval()
 
 
-def simulate_dash(sss, bws):
+def simulate_dash(sss, bws, memory, phase):
     # initialize parameters
     num_segments = sss.shape[0]  # number of segments
     num_qualities = sss.shape[1]  # number of quality levels
 
-    # initialize replay memory and action_selector
-    memory = ReplayMemory(1000)
-    selector = ActionSelector(num_qualities)
+    if phase == 'train':
+        # initialize action_selector
+        selector = ActionSelector(num_qualities, num_segments, greedy_policy=False)
+    elif phase == 'test':
+        selector = ActionSelector(num_qualities, num_segments, greedy_policy=True)
+    else:
+        sys.exit(phase+" is not supported.")
 
     ##########
     # training
@@ -184,9 +197,6 @@ def simulate_dash(sss, bws):
     mean_sqs = np.empty(num_episodes)  # mean segment qualities
     mean_rewards = np.empty(num_episodes)  # mean rewards
     for i_episode in range(num_episodes):
-
-        # TODO: use different video traces per episode
-
         sqs = np.empty(num_segments-CH_HISTORY)
         rewards = np.empty(num_segments-CH_HISTORY)
 
@@ -198,7 +208,6 @@ def simulate_dash(sss, bws):
             buffer=T,
             ch_history=bws[0:CH_HISTORY]
         )
-
         for t in range(CH_HISTORY, num_segments):
             sg_quality = selector.action(state)
             sqs[t-CH_HISTORY] = sg_quality
@@ -243,9 +252,9 @@ def simulate_dash(sss, bws):
             next_state_batch = torch.stack([experiences[i].next_state.tensor()
                                             for i in range(BATCH_SIZE)])
             action_batch = torch.tensor([experiences[i].action
-                                         for i in range(BATCH_SIZE)])
+                                         for i in range(BATCH_SIZE)], dtype=torch.long)
             reward_batch = torch.tensor([experiences[i].reward
-                                         for i in range(BATCH_SIZE)])
+                                         for i in range(BATCH_SIZE)], dtype=torch.float32)
 
             # $Q(s_t, q_t|\bm{w}_t)$ in (13) in [1]
             # 1. policy_net generates a batch of Q(...) for all q values.
@@ -253,7 +262,7 @@ def simulate_dash(sss, bws):
             state_action_values = policy_net(state_batch).gather(1, action_batch.view(BATCH_SIZE, -1))
 
             # $\max_{q}\hat{Q}(s_{t+1},q|\bar{\bm{w}}_t$ in (13) in [1]
-            # TODO: Replace policy_net with target_net.
+            # TASK 2: Replace policy_net with target_net.
             next_state_values = policy_net(next_state_batch).max(1)[0].detach()
 
             # expected Q values
@@ -271,7 +280,7 @@ def simulate_dash(sss, bws):
                 param.grad.data.clamp_(-1, 1)
             optimizer.step()
 
-            # TODO: Implement target network
+            # TASK2: Implement target network
             # # update the target network
             # if t % TARGET_UPDATE == 0:
             #     target_net.load_state_dict(policy_net.state_dict())
@@ -290,10 +299,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-V",
-        "--video_trace",
-        help="video trace file name; default is 'bigbuckbunny.npy'",
+        "--train_video_trace",
+        help="training video trace file name; default is 'bigbuckbunny.npy'",
         default='bigbuckbunny.npy',
+        type=str)
+    parser.add_argument(
+        "--test_video_trace",
+        help="testing video trace file name; default is 'bear.npy'",
+        default='bear.npy',
         type=str)
     parser.add_argument(
         "-C",
@@ -302,23 +315,34 @@ if __name__ == "__main__":
         default='bandwidths.npy',
         type=str)
     args = parser.parse_args()
-    video_trace = args.video_trace
+    train_video_trace = args.train_video_trace
+    test_video_trace = args.test_video_trace
     channel_bandwidths = args.channel_bandwidths
 
-    # read data
-    sss = np.load(video_trace)        # segment sizes [bit]
+    # initialize channel BWs and replay memory
     bws = np.load(channel_bandwidths)  # channel bandwdiths [bit/s]
+    memory = ReplayMemory(1000)
 
-    # simulate D-DASH
-    mean_sqs, mean_rewards = simulate_dash(sss, bws)
+    # training phase
+    sss = np.load(train_video_trace)        # segment sizes [bit]
+    train_mean_sqs, train_mean_rewards = simulate_dash(sss, bws, memory, 'train')
+
+    # testing phase
+    sss = np.load(test_video_trace)        # segment sizes [bit]
+    test_mean_sqs, test_mean_rewards = simulate_dash(sss, bws, memory, 'test')
 
     # plot results
+    mean_sqs = np.concatenate((test_mean_sqs, train_mean_sqs), axis=None)
+    mean_rewards = np.concatenate((test_mean_rewards, train_mean_rewards), axis=None)
     fig, axs = plt.subplots(nrows=2, sharex=True)
     axs[0].plot(mean_rewards)
     axs[0].set_ylabel("Reward")
+    axs[0].vlines(len(train_mean_rewards), *axs[0].get_ylim(), colors='red', linestyles='dotted')
     axs[1].plot(mean_sqs)
     axs[1].set_ylabel("Video Quality")
     axs[1].set_xlabel("Video Episode")
+    axs[1].vlines(len(train_mean_rewards), *axs[1].get_ylim(), colors='red', linestyles='dotted')
     plt.show()
     input("Press ENTER to continue...")
+    plt.savefig('d-dash.pdf', format='pdf')
     plt.close('all')

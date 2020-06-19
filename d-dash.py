@@ -34,10 +34,11 @@ from dataclasses import dataclass
 # global variables
 # - DQL
 CH_HISTORY = 2                  # number of channel capacity history samples
-BATCH_SIZE = 1000
+# BATCH_SIZE = 1000
 EPS_START = 0.8
 EPS_END = 0.0
 LEARNING_RATE = 1e-4
+MEMORY_SIZE = 10000
 # - FFN
 N_I = 3 + CH_HISTORY            # input dimension (= state dimension)
 N_H1 = 128
@@ -100,27 +101,44 @@ class Experience:
 
 
 class ReplayMemory(object):
-    """Replay memory based on a circular buffer (with overlapping)"""
-
+    """Replay memory based on a list"""
     def __init__(self, capacity):
         self.capacity = capacity
-        self.memory = [None] * self.capacity
+        self.memory = []
         self.position = 0
-        self.num_elements = 0
 
     def push(self, experience):
-        # if len(self.memory) < self.capacity:
-        #     self.memory.append(None)
+        if len(self.memory) < self.capacity:
+            self.memory.append(None)
         self.memory[self.position] = experience
         self.position = (self.position + 1) % self.capacity
-        if self.num_elements < self.capacity:
-            self.num_elements += 1
 
     def sample(self, batch_size):
         return random.sample(self.memory, batch_size)
 
     def get_num_elements(self):
-        return self.num_elements
+        return len(self.memory)
+
+    # """Replay memory based on a circular buffer (with overlapping)"""    
+    # def __init__(self, capacity):
+    #     self.capacity = capacity
+    #     self.memory = [None] * self.capacity
+    #     self.position = 0
+    #     self.num_elements = 0
+
+    # def push(self, experience):
+    #     # if len(self.memory) < self.capacity:
+    #     #     self.memory.append(None)
+    #     self.memory[self.position] = experience
+    #     self.position = (self.position + 1) % self.capacity
+    #     if self.num_elements < self.capacity:
+    #         self.num_elements += 1
+
+    # def sample(self, batch_size):
+    #     return random.sample(self.memory, batch_size)
+
+    # def get_num_elements(self):
+    #     return self.num_elements
 
 
 class ActionSelector(object):
@@ -177,7 +195,7 @@ optimizer = torch.optim.Adam(policy_net.parameters(), lr=LEARNING_RATE)
 # target_net.eval()
 
 
-def simulate_dash(sss, bws, memory, phase):
+def simulate_dash(sss, bws, memory, phase, batch_size):
     # initialize parameters
     num_segments = sss.shape[0]  # number of segments
     num_qualities = sss.shape[1]  # number of quality levels
@@ -244,22 +262,22 @@ def simulate_dash(sss, bws, memory, phase):
             #############################
             # optimize the policy network
             #############################
-            if memory.get_num_elements() < BATCH_SIZE:
+            if memory.get_num_elements() < batch_size:
                 continue
-            experiences = memory.sample(BATCH_SIZE)
+            experiences = memory.sample(batch_size)
             state_batch = torch.stack([experiences[i].state.tensor()
-                                       for i in range(BATCH_SIZE)])
+                                       for i in range(batch_size)])
             next_state_batch = torch.stack([experiences[i].next_state.tensor()
-                                            for i in range(BATCH_SIZE)])
+                                            for i in range(batch_size)])
             action_batch = torch.tensor([experiences[i].action
-                                         for i in range(BATCH_SIZE)], dtype=torch.long)
+                                         for i in range(batch_size)], dtype=torch.long)
             reward_batch = torch.tensor([experiences[i].reward
-                                         for i in range(BATCH_SIZE)], dtype=torch.float32)
+                                         for i in range(batch_size)], dtype=torch.float32)
 
             # $Q(s_t, q_t|\bm{w}_t)$ in (13) in [1]
             # 1. policy_net generates a batch of Q(...) for all q values.
             # 2. columns of actions taken are selected using 'action_batch'.
-            state_action_values = policy_net(state_batch).gather(1, action_batch.view(BATCH_SIZE, -1))
+            state_action_values = policy_net(state_batch).gather(1, action_batch.view(batch_size, -1))
 
             # $\max_{q}\hat{Q}(s_{t+1},q|\bar{\bm{w}}_t$ in (13) in [1]
             # TASK 2: Replace policy_net with target_net.
@@ -314,26 +332,33 @@ if __name__ == "__main__":
         help="channel bandwidths file name; default is 'bandwidths.npy'",
         default='bandwidths.npy',
         type=str)
+    parser.add_argument(
+        "-B",
+        "--batch_size",
+        help="batch size; default is 1000",
+        default=1000,
+        type=int)
     args = parser.parse_args()
     train_video_trace = args.train_video_trace
     test_video_trace = args.test_video_trace
     channel_bandwidths = args.channel_bandwidths
+    batch_size = args.batch_size
 
     # initialize channel BWs and replay memory
     bws = np.load(channel_bandwidths)  # channel bandwdiths [bit/s]
-    memory = ReplayMemory(1000)
+    memory = ReplayMemory(MEMORY_SIZE)
 
     # training phase
     sss = np.load(train_video_trace)        # segment sizes [bit]
-    train_mean_sqs, train_mean_rewards = simulate_dash(sss, bws, memory, 'train')
+    train_mean_sqs, train_mean_rewards = simulate_dash(sss, bws, memory, 'train', batch_size)
 
     # testing phase
     sss = np.load(test_video_trace)        # segment sizes [bit]
-    test_mean_sqs, test_mean_rewards = simulate_dash(sss, bws, memory, 'test')
+    test_mean_sqs, test_mean_rewards = simulate_dash(sss, bws, memory, 'test', batch_size)
 
     # plot results
-    mean_sqs = np.concatenate((test_mean_sqs, train_mean_sqs), axis=None)
-    mean_rewards = np.concatenate((test_mean_rewards, train_mean_rewards), axis=None)
+    mean_sqs = np.concatenate((train_mean_sqs, test_mean_sqs), axis=None)
+    mean_rewards = np.concatenate((train_mean_rewards, test_mean_rewards), axis=None)
     fig, axs = plt.subplots(nrows=2, sharex=True)
     axs[0].plot(mean_rewards)
     axs[0].set_ylabel("Reward")

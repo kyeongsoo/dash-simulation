@@ -164,7 +164,7 @@ class ActionSelector(object):
     def action(self, state):
         if self.greedy_policy:
             with torch.no_grad():
-                return int(torch.argmax(policy_net(state.tensor())))
+                return int(torch.argmax(policy_net(state.tensor().to(device))))
         else:
             sample = random.random()
             x = 20 * (self.steps_done / self.num_segments) - 6.  # scaled s.t. -6 < x < 14
@@ -172,7 +172,7 @@ class ActionSelector(object):
             # self.steps_done += 1
             if sample > eps_threshold:
                 with torch.no_grad():
-                    return int(torch.argmax(policy_net(state.tensor())))
+                    return int(torch.argmax(policy_net(state.tensor().to(device))))
             else:
                 return random.randrange(self.num_actions)
 
@@ -266,13 +266,13 @@ def simulate_dash(sss, bws, memory, phase, batch_size):
                 continue
             experiences = memory.sample(batch_size)
             state_batch = torch.stack([experiences[i].state.tensor()
-                                       for i in range(batch_size)])
+                                       for i in range(batch_size)]).to(device)
             next_state_batch = torch.stack([experiences[i].next_state.tensor()
-                                            for i in range(batch_size)])
+                                            for i in range(batch_size)]).to(device)
             action_batch = torch.tensor([experiences[i].action
-                                         for i in range(batch_size)], dtype=torch.long)
+                                         for i in range(batch_size)], dtype=torch.long).to(device)
             reward_batch = torch.tensor([experiences[i].reward
-                                         for i in range(batch_size)], dtype=torch.float32)
+                                         for i in range(batch_size)], dtype=torch.float32).to(device)
 
             # $Q(s_t, q_t|\bm{w}_t)$ in (13) in [1]
             # 1. policy_net generates a batch of Q(...) for all q values.

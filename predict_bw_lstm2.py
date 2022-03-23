@@ -1,14 +1,25 @@
-# This code is based on the nice sample code from:
-# https://machinelearningmastery.com/time-series-prediction-lstm-recurrent-neural-networks-python-keras/
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+##
+# @file     predict_bw_lstm2.py
+# @author   Kyeong Soo (Joseph) Kim <Kyeongsoo.Kim@xjtlu.edu.cn>
+# @date     2019-04-22
+#           2022-03-23 - updated for TensorFlow version 2.6
+#
+# @brief    Predict channel bandwidth.
+#
+# @remarks  This code is based on the nice sample code from:
+#           https://machinelearningmastery.com/how-to-develop-lstm-models-for-time-series-forecasting/
+
+# import modules
+import joblib
 import numpy as np
 import matplotlib.pyplot as plt
 import math
 import sys
+import tensorflow as tf
+import tensorflow.keras         # required for TF ver. 2.6
 sys.path.insert(0, '.') # for modules in the current directory
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM
-from sklearn.externals import joblib
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
 from utils import create_dataset, apply_transform
@@ -43,9 +54,9 @@ trainX = np.reshape(trainX, (trainX.shape[0], 1, trainX.shape[1]))
 testX = np.reshape(testX, (testX.shape[0], 1, testX.shape[1]))
 
 # create and fit the LSTM network
-model = Sequential()
-model.add(LSTM(4, input_shape=(1, look_back)))
-model.add(Dense(look_forward))
+model = tf.keras.Sequential()
+model.add(tf.keras.layers.LSTM(4, input_shape=(1, look_back)))
+model.add(tf.keras.layers.Dense(look_forward))
 model.compile(loss='mean_squared_error', optimizer='adam')
 model.fit(trainX, trainY, epochs=100, batch_size=1, verbose=2)
 # model.fit(trainX, trainY, epochs=5, batch_size=1, verbose=2) # for debugging
